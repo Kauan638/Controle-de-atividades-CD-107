@@ -150,6 +150,14 @@ document.getElementById('in-file').addEventListener('change', (e) => {
   arquivoSelecionado = e.target.files[0] || null;
   document.getElementById('btn-upload').disabled = !arquivoSelecionado;
   document.getElementById('upload-status').textContent = '';
+  const nameEl = document.getElementById('file-name-display');
+  if (arquivoSelecionado) {
+    nameEl.textContent = arquivoSelecionado.name;
+    nameEl.classList.add('has-file');
+  } else {
+    nameEl.textContent = 'Nenhum arquivo selecionado';
+    nameEl.classList.remove('has-file');
+  }
 });
 
 function normalizarHeader(str) {
