@@ -31,8 +31,10 @@ const DB = {
 
 function seedDadosExemplo() {
   DB.setEnderecos({
-    '60.121.2.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L', tipo: 'apanha' },
-    '72.124.31': { codigo: '51890', descricao: 'Sabão em Pó 1kg', tipo: 'pulmao' }
+    '01.1.1.1.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L', tipo: 'apanha' },
+    '01.1.1.2.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L', tipo: 'apanha' },
+    '01.3.8.31.1': { codigo: '51890', descricao: 'Sabão em Pó 1kg', tipo: 'pulmao' },
+    '01.3.8.41.1': { codigo: '51890', descricao: 'Sabão em Pó 1kg', tipo: 'pulmao' }
   });
   DB.setOperadores([
     { matricula: '225946', nome: 'Operador Teste' }
@@ -200,7 +202,8 @@ function lerTextoDelimitado(file) {
     reader.onload = (e) => {
       try {
         const decoder = new TextDecoder('windows-1252');
-        const texto = decoder.decode(e.target.result);
+        let texto = decoder.decode(e.target.result);
+        texto = texto.replace(/^\uFEFF/, ''); // remove BOM se existir
         const linhas = texto.split(/\r\n|\n|\r/).filter(l => l.length > 0);
         if (linhas.length === 0) { resolve([]); return; }
         // detecta delimitador pela linha de cabeçalho
@@ -212,7 +215,9 @@ function lerTextoDelimitado(file) {
           const n = header.split(c).length;
           if (n > max) { max = n; delim = c; }
         });
-        const rows = linhas.map(l => l.split(delim));
+        const rows = linhas.map(l => l.split(delim).map(c => c.trim()));
+        console.log('[lerTextoDelimitado] delimitador detectado:', JSON.stringify(delim), '| colunas no cabeçalho:', rows[0].length);
+        console.log('[lerTextoDelimitado] cabeçalho bruto:', rows[0]);
         resolve(rows);
       } catch (err) { reject(err); }
     };
@@ -224,6 +229,7 @@ function lerTextoDelimitado(file) {
 // -- parser específico do arquivo "Posição de Endereços" (mesmo formato dos outros projetos) --
 function ehPosicaoDeEnderecos(headerRow) {
   const normalized = headerRow.map(normalizarHeader);
+  console.log('[ehPosicaoDeEnderecos] cabeçalho normalizado:', normalized);
   return normalized.includes('codrua') && normalized.includes('nropredio') && normalized.includes('especie_end');
 }
 
@@ -443,9 +449,11 @@ document.querySelectorAll('#screen-menu .choice-card').forEach(card => {
 function abrirForm(tipo) {
   tipoAtual = tipo;
   itemEncontrado = null;
-  document.getElementById('in-endereco').value = '';
+  enderecoSelecionado = null;
+  document.getElementById('in-codigo').value = '';
   document.getElementById('in-qtd').value = '';
   document.getElementById('form-error').textContent = '';
+  document.getElementById('lista-enderecos').innerHTML = '';
   resetLookupBox();
 
   const badge = document.getElementById('form-badge');
@@ -455,57 +463,119 @@ function abrirForm(tipo) {
 
   atualizarBotaoConfirmar();
   showScreen('form');
-  setTimeout(() => document.getElementById('in-endereco').focus(), 150);
+  setTimeout(() => document.getElementById('in-codigo').focus(), 150);
 }
 document.getElementById('btn-voltar-menu').addEventListener('click', () => showScreen('menu'));
 
 function resetLookupBox() {
   const box = document.getElementById('lookup-box');
   box.className = 'lookup-box';
-  box.innerHTML = '<span class="placeholder">Digite o endereço para buscar o item…</span>';
+  box.innerHTML = '<span class="placeholder">Digite o código para ver os endereços…</span>';
 }
 
-document.getElementById('in-endereco').addEventListener('input', () => {
-  const digitado = document.getElementById('in-endereco').value.trim();
-  const box = document.getElementById('lookup-box');
+let enderecoSelecionado = null; // endereço "amigável" (sem depósito) escolhido na lista
 
-  if (!digitado) { itemEncontrado = null; resetLookupBox(); atualizarBotaoConfirmar(); return; }
-
-  const item = buscarEnderecoLocal(digitado, tipoAtual);
-
-  if (!item) {
-    itemEncontrado = null;
-    box.className = 'lookup-box notfound';
-    box.innerHTML = '<span class="status-icon">✕</span><div class="info"><div class="desc">Endereço não encontrado</div><div class="cod">Confira o endereço ou o tipo (Apanha/Pulmão) selecionado</div></div>';
-  } else {
-    itemEncontrado = { codigo: item.codigo, descricao: item.descricao };
-    box.className = 'lookup-box found';
-    box.innerHTML = `<span class="status-icon">✓</span><div class="info"><div class="desc">${escapeHtml(item.descricao)}</div><div class="cod">Cód. ${escapeHtml(String(item.codigo))}</div></div>`;
-  }
+document.getElementById('in-codigo').addEventListener('input', () => {
+  const codigo = document.getElementById('in-codigo').value.trim();
+  itemEncontrado = null;
+  enderecoSelecionado = null;
+  resetLookupBox();
   atualizarBotaoConfirmar();
+
+  const listaEl = document.getElementById('lista-enderecos');
+  if (!codigo) { listaEl.innerHTML = ''; return; }
+
+  const resultados = buscarPorCodigo(codigo, tipoAtual);
+
+  if (resultados.length === 0) {
+    listaEl.innerHTML = '';
+    const box = document.getElementById('lookup-box');
+    box.className = 'lookup-box notfound';
+    box.innerHTML = '<span class="status-icon">✕</span><div class="info"><div class="desc">Nenhum endereço encontrado</div><div class="cod">Confira o código ou o tipo (Apanha/Pulmão) selecionado</div></div>';
+    return;
+  }
+
+  if (resultados.length === 1) {
+    // só tem um endereço pra esse código: já seleciona direto
+    listaEl.innerHTML = '';
+    selecionarEndereco(resultados[0]);
+    return;
+  }
+
+  renderListaEnderecos(resultados);
 });
 
-// Chave normalizada: monta CODRUA.NROPREDIO.NROAPARTAMENTO.NROSALA sem zeros à
-// esquerda e tenta nos depósitos mais comuns (01 = principal, depois 02, 03).
-// Se o endereço já indexado tiver "tipo" (veio do arquivo Posição de Endereços),
-// só bate se for do mesmo tipo (apanha/pulmao) que o operador selecionou.
-function buscarEnderecoLocal(digitado, tipo) {
+// Busca todos os endereços que guardam o código informado, filtrando pelo
+// tipo (apanha/pulmao) da tela atual, em ordem crescente de endereço.
+function buscarPorCodigo(codigo, tipo) {
   const base = DB.getEnderecos();
-  const partes = digitado.split('.').map(p => stripZeros(p));
-
-  // 1) tenta exatamente como foi digitado (planilha genérica, sem depósito)
-  if (base[digitado] && (!base[digitado].tipo || base[digitado].tipo === tipo)) {
-    return base[digitado];
-  }
-
-  // 2) tenta prefixando o depósito (formato Posição de Endereços)
-  for (const dep of ['01', '02', '03']) {
-    const key = [dep, ...partes].join('.');
-    if (base[key] && (!base[key].tipo || base[key].tipo === tipo)) {
-      return base[key];
+  const resultados = [];
+  for (const key in base) {
+    const item = base[key];
+    if (item.codigo === codigo && (!item.tipo || item.tipo === tipo)) {
+      resultados.push({
+        key,
+        endereco: keyParaEnderecoAmigavel(key),
+        descricao: item.descricao,
+        codigo: item.codigo
+      });
     }
   }
-  return null;
+  resultados.sort((a, b) => compararEnderecos(a.key, b.key));
+  return resultados;
+}
+
+// remove o prefixo de depósito da chave interna (ex: "01.3.8.31.1" -> "3.8.31.1")
+function keyParaEnderecoAmigavel(key) {
+  const partes = key.split('.');
+  return partes.length > 1 ? partes.slice(1).join('.') : key;
+}
+
+// ordena chaves de endereço numericamente, segmento a segmento
+function compararEnderecos(keyA, keyB) {
+  const a = keyA.split('.').map(Number);
+  const b = keyB.split('.').map(Number);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function renderListaEnderecos(resultados) {
+  const container = document.getElementById('lista-enderecos');
+  container.innerHTML = '';
+  const list = document.createElement('div');
+  list.className = 'addr-list';
+  resultados.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'addr-item';
+    div.innerHTML = `<span class="end">${escapeHtml(r.endereco)}</span><span class="desc">${escapeHtml(r.descricao)}</span>`;
+    div.addEventListener('click', () => {
+      container.querySelectorAll('.addr-item').forEach(el => el.classList.remove('sel'));
+      div.classList.add('sel');
+      selecionarEndereco(r);
+    });
+    list.appendChild(div);
+  });
+  container.appendChild(list);
+
+  const box = document.getElementById('lookup-box');
+  box.className = 'lookup-box';
+  box.innerHTML = `<span class="placeholder">${resultados.length} endereços encontrados — escolha um acima ↑</span>`;
+}
+
+function selecionarEndereco(r) {
+  itemEncontrado = { codigo: r.codigo, descricao: r.descricao };
+  enderecoSelecionado = r.endereco;
+
+  const box = document.getElementById('lookup-box');
+  box.className = 'lookup-box found';
+  box.innerHTML = `<span class="status-icon">✓</span><div class="info"><div class="desc">${escapeHtml(r.descricao)}</div><div class="cod">Endereço ${escapeHtml(r.endereco)} · Cód. ${escapeHtml(r.codigo)}</div></div>`;
+
+  atualizarBotaoConfirmar();
+  document.getElementById('in-qtd').focus();
 }
 
 document.getElementById('in-qtd').addEventListener('input', atualizarBotaoConfirmar);
@@ -521,12 +591,13 @@ document.getElementById('btn-confirmar').addEventListener('click', () => {
   if (!itemEncontrado) return;
   document.getElementById('modal-desc').textContent = itemEncontrado.descricao;
   document.getElementById('modal-cod').textContent = itemEncontrado.codigo;
+  document.getElementById('modal-end').textContent = enderecoSelecionado;
   modal.classList.add('active');
 });
 document.getElementById('modal-nao').addEventListener('click', () => modal.classList.remove('active'));
 
 document.getElementById('modal-sim').addEventListener('click', () => {
-  const endereco = document.getElementById('in-endereco').value.trim();
+  const endereco = enderecoSelecionado;
   const qtd = parseInt(document.getElementById('in-qtd').value, 10);
 
   DB.addAjuste({

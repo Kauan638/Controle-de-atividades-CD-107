@@ -147,12 +147,14 @@
     <span class="badge" id="form-badge">APANHA</span>
     <div class="panel">
       <div class="field">
-        <label for="in-endereco">Endereço</label>
-        <input type="text" id="in-endereco" placeholder="Ex: 60.121.2.1" autocomplete="off">
+        <label for="in-codigo">Código do item</label>
+        <input type="tel" inputmode="numeric" id="in-codigo" placeholder="Ex: 104167" autocomplete="off">
       </div>
 
+      <div id="lista-enderecos"></div>
+
       <div class="lookup-box" id="lookup-box">
-        <span class="placeholder">Digite o endereço para buscar o item…</span>
+        <span class="placeholder">Digite o código para ver os endereços…</span>
       </div>
 
       <div class="field">
@@ -181,7 +183,7 @@
 <div class="modal-overlay" id="modal-confirm">
   <div class="modal-box">
     <h3>Confirmar ajuste</h3>
-    <p>Deseja ajustar o item <strong id="modal-desc">—</strong> (Cód. <strong id="modal-cod">—</strong>)?</p>
+    <p>Deseja ajustar o item <strong id="modal-desc">—</strong> (Cód. <strong id="modal-cod">—</strong>) no endereço <strong id="modal-end">—</strong>?</p>
     <div class="btn-row">
       <button class="btn btn-secondary" id="modal-nao">Não</button>
       <button class="btn btn-primary" id="modal-sim">Sim</button>
