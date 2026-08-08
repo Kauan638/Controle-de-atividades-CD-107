@@ -66,11 +66,13 @@
     <div class="panel" style="margin-bottom:20px;">
       <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:2px; color:var(--amber); margin-bottom:10px;">BASE DE ENDEREÇOS</div>
       <p style="color:var(--text-dim); font-size:13px; margin-top:0;">
-        Envie a planilha (.xlsx ou .csv) com colunas de <strong>Endereço</strong>, <strong>Código</strong> e <strong>Descrição</strong>.
-        Por enquanto isso fica salvo só neste navegador (localStorage) — quando plugarmos o Firebase, vira compartilhado de verdade.
+        Envie o arquivo <strong>Posição de Endereços</strong> (.txt, ; delimitado) — o mesmo formato que
+        você já usa no Gerador de Abastecimento. Endereço = CODRUA.NROPREDIO.NROAPARTAMENTO.NROSALA,
+        e só entram endereços <strong>Ocupados</strong> com item. Por enquanto isso fica salvo só
+        neste navegador (localStorage) — quando plugarmos o Firebase, vira compartilhado de verdade.
       </p>
       <div class="field">
-        <input type="file" id="in-file" accept=".xlsx,.xls,.csv">
+        <input type="file" id="in-file" accept=".xlsx,.xls,.csv,.txt">
       </div>
       <button class="btn btn-primary" id="btn-upload" disabled>Processar e salvar</button>
       <div class="progress-wrap" id="progress-wrap" style="display:none;">

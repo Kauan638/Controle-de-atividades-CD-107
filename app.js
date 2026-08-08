@@ -31,8 +31,8 @@ const DB = {
 
 function seedDadosExemplo() {
   DB.setEnderecos({
-    '60.121.2.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L' },
-    '72.124.31': { codigo: '51890', descricao: 'Sabão em Pó 1kg' }
+    '60.121.2.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L', tipo: 'apanha' },
+    '72.124.31': { codigo: '51890', descricao: 'Sabão em Pó 1kg', tipo: 'pulmao' }
   });
   DB.setOperadores([
     { matricula: '225946', nome: 'Operador Teste' }
@@ -187,6 +187,92 @@ function lerPlanilha(file) {
   });
 }
 
+// -- remove zeros à esquerda de um segmento de endereço (001 -> 1), mantendo "0" --
+function stripZeros(s) {
+  const t = String(s || '').trim().replace(/^0+/, '');
+  return t === '' ? '0' : t;
+}
+
+// -- leitura de texto delimitado (.txt / .csv), decodificando windows-1252 --
+function lerTextoDelimitado(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const decoder = new TextDecoder('windows-1252');
+        const texto = decoder.decode(e.target.result);
+        const linhas = texto.split(/\r\n|\n|\r/).filter(l => l.length > 0);
+        if (linhas.length === 0) { resolve([]); return; }
+        // detecta delimitador pela linha de cabeçalho
+        const candidatos = [';', ',', '\t'];
+        const header = linhas[0];
+        let delim = ';';
+        let max = -1;
+        candidatos.forEach(c => {
+          const n = header.split(c).length;
+          if (n > max) { max = n; delim = c; }
+        });
+        const rows = linhas.map(l => l.split(delim));
+        resolve(rows);
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// -- parser específico do arquivo "Posição de Endereços" (mesmo formato dos outros projetos) --
+function ehPosicaoDeEnderecos(headerRow) {
+  const normalized = headerRow.map(normalizarHeader);
+  return normalized.includes('codrua') && normalized.includes('nropredio') && normalized.includes('especie_end');
+}
+
+function processarPosicaoDeEnderecos(rows, onProgress) {
+  const header = rows[0].map(normalizarHeader);
+  const idx = {
+    deposito: header.indexOf('deposito'),
+    codrua: header.indexOf('codrua'),
+    nropredio: header.indexOf('nropredio'),
+    nroapartamento: header.indexOf('nroapartamento'),
+    nrosala: header.indexOf('nrosala'),
+    especie: header.indexOf('especie_end'),
+    codigo: header.indexOf('codigo'),
+    descricao: header.indexOf('descricao'),
+    status: header.indexOf('status_endereco'),
+  };
+
+  const base = {};
+  let indexados = 0;
+  const total = rows.length - 1;
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const status = (r[idx.status] || '').trim();
+    const codigo = (r[idx.codigo] || '').trim();
+    if (status !== 'Ocupado' || !codigo) continue; // só endereços ocupados com item
+
+    const dep = (r[idx.deposito] || '01').trim();
+    const key = [
+      dep,
+      stripZeros(r[idx.codrua]),
+      stripZeros(r[idx.nropredio]),
+      stripZeros(r[idx.nroapartamento]),
+      stripZeros(r[idx.nrosala]),
+    ].join('.');
+
+    const especie = (r[idx.especie] || '').trim();
+    base[key] = {
+      codigo,
+      descricao: (r[idx.descricao] || '').trim(),
+      tipo: especie === 'Apanha' ? 'apanha' : 'pulmao'
+    };
+    indexados++;
+    if (onProgress && indexados % 2000 === 0) onProgress(i, total, indexados);
+  }
+  return { base, indexados, total };
+}
+
+
 document.getElementById('btn-upload').addEventListener('click', async () => {
   if (!arquivoSelecionado) return;
   const statusEl = document.getElementById('upload-status');
@@ -196,43 +282,61 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
 
   btn.disabled = true;
   statusEl.style.color = 'var(--text-dim)';
-  statusEl.textContent = 'Lendo planilha…';
-  progWrap.style.display = 'none';
+  statusEl.textContent = 'Lendo arquivo…';
+  progWrap.style.display = 'block';
+  progBar.style.width = '0%';
 
   try {
-    const rows = await lerPlanilha(arquivoSelecionado);
-    if (rows.length < 2) throw new Error('Planilha vazia ou sem linhas de dados.');
+    const nomeArquivo = arquivoSelecionado.name.toLowerCase();
+    const ehXlsx = nomeArquivo.endsWith('.xlsx') || nomeArquivo.endsWith('.xls');
 
-    const cols = identificarColunas(rows[0]);
-    if (cols.endereco === -1 || cols.codigo === -1 || cols.descricao === -1) {
-      throw new Error('Não encontrei as colunas de Endereço/Código/Descrição no cabeçalho.');
-    }
+    const rows = ehXlsx ? await lerPlanilha(arquivoSelecionado) : await lerTextoDelimitado(arquivoSelecionado);
+    if (rows.length < 2) throw new Error('Arquivo vazio ou sem linhas de dados.');
 
-    const base = DB.getEnderecos();
-    let count = 0;
-    progWrap.style.display = 'block';
+    let base, indexados, total;
 
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      const endereco = r[cols.endereco] != null ? String(r[cols.endereco]).trim() : '';
-      if (!endereco) continue;
-      base[endereco] = {
-        codigo: r[cols.codigo] != null ? String(r[cols.codigo]).trim() : '',
-        descricao: r[cols.descricao] != null ? String(r[cols.descricao]).trim() : ''
-      };
-      count++;
-      if (count % 200 === 0) {
-        const pct = Math.round((i / rows.length) * 100);
+    if (ehPosicaoDeEnderecos(rows[0])) {
+      // formato "Posição de Endereços" (o mesmo dos outros projetos)
+      statusEl.textContent = 'Processando Posição de Endereços…';
+      const resultado = processarPosicaoDeEnderecos(rows, (i, tot, idx) => {
+        const pct = Math.round((i / tot) * 100);
         progBar.style.width = pct + '%';
-        statusEl.textContent = `Processando ${count}…`;
-        await new Promise(r => setTimeout(r, 0)); // não travar a UI
+        statusEl.textContent = `Processando… ${idx} endereços ocupados encontrados`;
+      });
+      base = resultado.base; indexados = resultado.indexados; total = resultado.total;
+    } else {
+      // fallback: planilha genérica com colunas Endereço/Código/Descrição
+      const cols = identificarColunas(rows[0]);
+      if (cols.endereco === -1 || cols.codigo === -1 || cols.descricao === -1) {
+        throw new Error('Não reconheci esse formato — nem é "Posição de Endereços" nem tem colunas de Endereço/Código/Descrição.');
       }
+      base = {};
+      indexados = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        const endereco = r[cols.endereco] != null ? String(r[cols.endereco]).trim() : '';
+        if (!endereco) continue;
+        base[endereco] = {
+          codigo: r[cols.codigo] != null ? String(r[cols.codigo]).trim() : '',
+          descricao: r[cols.descricao] != null ? String(r[cols.descricao]).trim() : '',
+          tipo: null
+        };
+        indexados++;
+      }
+      total = rows.length - 1;
     }
 
-    DB.setEnderecos(base);
+    if (indexados === 0) throw new Error('Nenhum endereço ocupado/válido encontrado no arquivo.');
+
+    try {
+      DB.setEnderecos(base);
+    } catch (quotaErr) {
+      throw new Error('A base ficou grande demais pro navegador guardar (localStorage cheio). Isso vai se resolver quando migrarmos pro Firebase — por ora, tente um arquivo menor.');
+    }
+
     progBar.style.width = '100%';
     statusEl.style.color = 'var(--green)';
-    statusEl.textContent = `✓ Base atualizada: ${count} endereços salvos neste navegador.`;
+    statusEl.textContent = `✓ Base atualizada: ${indexados} endereços salvos (de ${total} linhas lidas).`;
     atualizarContadorEnderecos();
   } catch (e) {
     console.error(e);
@@ -362,18 +466,17 @@ function resetLookupBox() {
 }
 
 document.getElementById('in-endereco').addEventListener('input', () => {
-  const endereco = document.getElementById('in-endereco').value.trim();
+  const digitado = document.getElementById('in-endereco').value.trim();
   const box = document.getElementById('lookup-box');
 
-  if (!endereco) { itemEncontrado = null; resetLookupBox(); atualizarBotaoConfirmar(); return; }
+  if (!digitado) { itemEncontrado = null; resetLookupBox(); atualizarBotaoConfirmar(); return; }
 
-  const base = DB.getEnderecos();
-  const item = base[endereco];
+  const item = buscarEnderecoLocal(digitado, tipoAtual);
 
   if (!item) {
     itemEncontrado = null;
     box.className = 'lookup-box notfound';
-    box.innerHTML = '<span class="status-icon">✕</span><div class="info"><div class="desc">Endereço não encontrado</div><div class="cod">Confira o endereço digitado</div></div>';
+    box.innerHTML = '<span class="status-icon">✕</span><div class="info"><div class="desc">Endereço não encontrado</div><div class="cod">Confira o endereço ou o tipo (Apanha/Pulmão) selecionado</div></div>';
   } else {
     itemEncontrado = { codigo: item.codigo, descricao: item.descricao };
     box.className = 'lookup-box found';
@@ -381,6 +484,29 @@ document.getElementById('in-endereco').addEventListener('input', () => {
   }
   atualizarBotaoConfirmar();
 });
+
+// Chave normalizada: monta CODRUA.NROPREDIO.NROAPARTAMENTO.NROSALA sem zeros à
+// esquerda e tenta nos depósitos mais comuns (01 = principal, depois 02, 03).
+// Se o endereço já indexado tiver "tipo" (veio do arquivo Posição de Endereços),
+// só bate se for do mesmo tipo (apanha/pulmao) que o operador selecionou.
+function buscarEnderecoLocal(digitado, tipo) {
+  const base = DB.getEnderecos();
+  const partes = digitado.split('.').map(p => stripZeros(p));
+
+  // 1) tenta exatamente como foi digitado (planilha genérica, sem depósito)
+  if (base[digitado] && (!base[digitado].tipo || base[digitado].tipo === tipo)) {
+    return base[digitado];
+  }
+
+  // 2) tenta prefixando o depósito (formato Posição de Endereços)
+  for (const dep of ['01', '02', '03']) {
+    const key = [dep, ...partes].join('.');
+    if (base[key] && (!base[key].tipo || base[key].tipo === tipo)) {
+      return base[key];
+    }
+  }
+  return null;
+}
 
 document.getElementById('in-qtd').addEventListener('input', atualizarBotaoConfirmar);
 
