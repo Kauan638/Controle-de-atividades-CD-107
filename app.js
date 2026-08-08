@@ -863,12 +863,15 @@ document.getElementById('btn-finalizar-tarefa').addEventListener('click', async 
   }
 });
 
-// -- Operador: notificação quando a mesa confirma um ajuste solicitado --
+// -- Operador: histórico próprio + notificação quando a mesa confirma um ajuste solicitado --
 let unsubMeusAjustes = null;
 function attachNotificacaoAjustes() {
   if (unsubMeusAjustes) return;
   unsubMeusAjustes = db.collection('ajustes').where('matricula', '==', operador.matricula).onSnapshot(
     snap => {
+      const lista = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderMeusAjustes(lista);
+
       snap.docChanges().forEach(change => {
         if (change.type === 'modified') {
           const d = change.doc.data();
@@ -881,6 +884,34 @@ function attachNotificacaoAjustes() {
     },
     err => console.error('Erro ao ouvir meus ajustes:', err)
   );
+}
+
+function renderMeusAjustes(lista) {
+  const wrap = document.getElementById('meus-ajustes-list');
+  if (lista.length === 0) {
+    wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhum ajuste solicitado ainda.</p>';
+    return;
+  }
+  const ordenado = [...lista].sort((a, b) => {
+    const ta = (a.timestamp && a.timestamp.toDate) ? a.timestamp.toDate().getTime() : Date.now();
+    const tb = (b.timestamp && b.timestamp.toDate) ? b.timestamp.toDate().getTime() : Date.now();
+    return tb - ta;
+  });
+  wrap.innerHTML = ordenado.map(a => {
+    const ts = (a.timestamp && a.timestamp.toDate) ? a.timestamp.toDate() : new Date();
+    const hora = ts.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const concluido = a.status === 'concluido';
+    return `
+      <div class="pend-item">
+        <div class="top-row">
+          <span class="badge ${a.tipo}" style="margin:0;">${(a.tipo || '').toUpperCase()}</span>
+          <span class="status-badge ${concluido ? 'concluido' : 'pendente'}">${concluido ? 'Confirmado' : 'Pendente'}</span>
+        </div>
+        <div class="desc-line">${escapeHtml(a.descricao || '')}</div>
+        <div class="meta-line">End. ${escapeHtml(a.endereco || '')} · Cód. ${escapeHtml(a.codigo || '')} · ${a.qtd}cx · ${hora}</div>
+      </div>
+    `;
+  }).join('');
 }
 
 // ============================================================

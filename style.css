@@ -381,6 +381,16 @@ body {
   .mesa-nav-btn.active { border-left-color: transparent; border-bottom-color: var(--amber); }
 }
 
+.status-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .5px;
+  padding: 2px 9px;
+  border-radius: 20px;
+}
+.status-badge.pendente { background: var(--amber-dim); color: var(--amber); }
+.status-badge.concluido { background: var(--green-dim); color: var(--green); }
+
 /* ---------- Layout largo da Mesa (usa a tela toda em telas grandes) ---------- */
 #app.mesa-wide {
   max-width: 1400px;
