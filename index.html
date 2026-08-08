@@ -6,7 +6,7 @@
 <title>Ajuste de Pulmão/Apanha — CD-107</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <div id="app">
@@ -62,124 +62,161 @@
       <button class="link-btn" id="btn-logout-mesa">Sair</button>
     </div>
 
-    <div class="mesa-grid">
+    <div class="mesa-shell">
 
-      <!-- COLUNA 1: Ajustes pendentes + histórico -->
-      <div class="mesa-col">
-        <div class="panel">
-          <div class="panel-title">
-            <span>AJUSTES PENDENTES</span>
-            <span class="count-pill" id="pend-count">0</span>
-          </div>
-          <div id="pend-ajustes-list" class="scroll-panel">
-            <p style="color:var(--text-faint); font-size:13px;">Nenhum ajuste pendente.</p>
+      <!-- SIDEBAR -->
+      <aside class="mesa-sidebar">
+        <div class="side-group-label">Cadastros</div>
+        <button class="mesa-nav-btn active" data-page="base">
+          <span class="nav-icon">🗺️</span> Base &amp; Operadores
+        </button>
+
+        <div class="side-group-label">Ajustes</div>
+        <button class="mesa-nav-btn" data-page="ajustes">
+          <span class="nav-icon">✅</span> Ajustes
+          <span class="nav-badge zero" id="nav-badge-ajustes">0</span>
+        </button>
+
+        <div class="side-group-label">Atividades</div>
+        <button class="mesa-nav-btn" data-page="tarefas">
+          <span class="nav-icon">🗂️</span> Tarefas
+          <span class="nav-badge zero" id="nav-badge-tarefas">0</span>
+        </button>
+      </aside>
+
+      <!-- CONTEÚDO -->
+      <div class="mesa-content">
+
+        <!-- PÁGINA 1: Base de Endereços + Operadores -->
+        <div class="mesa-page active" id="mesa-page-base">
+          <div class="mesa-page-grid cols-2">
+            <div class="panel">
+              <div class="panel-title"><span>BASE DE ENDEREÇOS</span></div>
+              <label class="file-upload" for="in-file">
+                <span class="file-upload-btn">📄 Escolher arquivo</span>
+                <span class="file-upload-name" id="file-name-display">Nenhum arquivo selecionado</span>
+              </label>
+              <input type="file" id="in-file" accept=".xlsx,.xls,.csv,.txt" hidden>
+              <button class="btn btn-primary" id="btn-upload" disabled>Processar e salvar</button>
+              <div class="progress-wrap" id="progress-wrap" style="display:none;">
+                <div class="progress-bar" id="progress-bar"></div>
+              </div>
+              <div class="error-text" id="upload-status"></div>
+              <p style="color:var(--text-faint); font-size:12px; margin-bottom:0;">
+                Base atual: <strong id="qtd-enderecos">0</strong> endereços cadastrados.
+              </p>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title"><span>OPERADORES</span></div>
+              <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:end; margin-bottom:16px;">
+                <div class="field" style="margin-bottom:0;">
+                  <label>Matrícula</label>
+                  <input type="text" id="op-matricula" placeholder="225946">
+                </div>
+                <div class="field" style="margin-bottom:0;">
+                  <label>Nome</label>
+                  <input type="text" id="op-nome" placeholder="Nome completo">
+                </div>
+                <button class="btn btn-primary" id="btn-add-op" style="height:44px;">+</button>
+              </div>
+              <div class="scroll-panel">
+                <table class="op-table">
+                  <thead><tr><th>Matrícula</th><th>Nome</th><th></th></tr></thead>
+                  <tbody id="op-tbody"><tr><td colspan="3" style="color:var(--text-faint);">Nenhum operador cadastrado ainda.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel-title"><span>HISTÓRICO DE AJUSTES</span></div>
-          <div class="scroll-panel">
-            <table class="op-table">
-              <thead><tr><th>Quando</th><th>Op.</th><th>Tipo</th><th>Endereço</th><th>Item</th><th>Qtd</th></tr></thead>
-              <tbody id="ajustes-tbody"><tr><td colspan="6" style="color:var(--text-faint);">Nenhum ajuste concluído ainda.</td></tr></tbody>
-            </table>
+        <!-- PÁGINA 2: Ajustes pendentes + histórico -->
+        <div class="mesa-page" id="mesa-page-ajustes">
+          <div class="mesa-page-grid cols-2">
+            <div class="panel">
+              <div class="panel-title">
+                <span>AJUSTES PENDENTES</span>
+                <span class="count-pill" id="pend-count">0</span>
+              </div>
+              <div id="pend-ajustes-list" class="scroll-panel">
+                <p style="color:var(--text-faint); font-size:13px;">Nenhum ajuste pendente.</p>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title"><span>HISTÓRICO DE AJUSTES</span></div>
+              <div class="scroll-panel">
+                <table class="op-table">
+                  <thead><tr><th>Quando</th><th>Op.</th><th>Tipo</th><th>Endereço</th><th>Item</th><th>Qtd</th></tr></thead>
+                  <tbody id="ajustes-tbody"><tr><td colspan="6" style="color:var(--text-faint);">Nenhum ajuste concluído ainda.</td></tr></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
+
+        <!-- PÁGINA 3: Gerar tarefa + tarefas em aberto + aguardando + ranking -->
+        <div class="mesa-page" id="mesa-page-tarefas">
+          <div class="mesa-page-grid cols-3">
+            <div class="panel">
+              <div class="panel-title"><span>GERAR TAREFA</span></div>
+              <div class="field">
+                <label for="tar-codigo">Código do produto</label>
+                <input type="text" id="tar-codigo" placeholder="Ex: 104167">
+              </div>
+              <div class="field">
+                <label for="tar-endereco">Endereço</label>
+                <input type="text" id="tar-endereco" placeholder="Ex: 3.8.31.1">
+              </div>
+              <div class="field">
+                <label for="tar-descricao">Descrição</label>
+                <input type="text" id="tar-descricao" placeholder="Descrição do item">
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div class="field">
+                  <label for="tar-qtd">Quantidade</label>
+                  <input type="text" id="tar-qtd" placeholder="Ex: 20cx">
+                </div>
+                <div class="field">
+                  <label for="tar-destino">Destino</label>
+                  <input type="text" id="tar-destino" placeholder="Ex: Doca 12">
+                </div>
+              </div>
+              <button class="btn btn-primary" id="btn-criar-tarefa">Criar Tarefa</button>
+              <div class="error-text" id="tarefa-error"></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title">
+                <span>TAREFAS EM ABERTO</span>
+                <span class="count-pill" id="tarefas-count">0</span>
+              </div>
+              <div id="tarefas-mesa-list" class="scroll-panel">
+                <p style="color:var(--text-faint); font-size:13px;">Nenhuma tarefa em aberto.</p>
+              </div>
+
+              <div class="panel-title" style="margin-top:20px;">
+                <span>AGUARDANDO CONFIRMAÇÃO</span>
+                <span class="count-pill" id="aguardando-count">0</span>
+              </div>
+              <div id="aguardando-list" class="scroll-panel">
+                <p style="color:var(--text-faint); font-size:13px;">Nada aguardando confirmação.</p>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title"><span>RANKING DE MOVIMENTAÇÕES</span></div>
+              <div id="ranking-list" class="scroll-panel">
+                <p style="color:var(--text-faint); font-size:13px;">Sem dados ainda.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
-
-      <!-- COLUNA 2: Base de endereços + operadores -->
-      <div class="mesa-col">
-        <div class="panel">
-          <div class="panel-title"><span>BASE DE ENDEREÇOS</span></div>
-
-          <label class="file-upload" for="in-file">
-            <span class="file-upload-btn">📄 Escolher arquivo</span>
-            <span class="file-upload-name" id="file-name-display">Nenhum arquivo selecionado</span>
-          </label>
-          <input type="file" id="in-file" accept=".xlsx,.xls,.csv,.txt" hidden>
-          <button class="btn btn-primary" id="btn-upload" disabled>Processar e salvar</button>
-          <div class="progress-wrap" id="progress-wrap" style="display:none;">
-            <div class="progress-bar" id="progress-bar"></div>
-          </div>
-          <div class="error-text" id="upload-status"></div>
-          <p style="color:var(--text-faint); font-size:12px; margin-bottom:0;">
-            Base atual: <strong id="qtd-enderecos">0</strong> endereços cadastrados.
-          </p>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title"><span>OPERADORES</span></div>
-          <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap:8px; align-items:end; margin-bottom:16px;">
-            <div class="field" style="margin-bottom:0;">
-              <label>Matrícula</label>
-              <input type="text" id="op-matricula" placeholder="225946">
-            </div>
-            <div class="field" style="margin-bottom:0;">
-              <label>Nome</label>
-              <input type="text" id="op-nome" placeholder="Nome completo">
-            </div>
-            <button class="btn btn-primary" id="btn-add-op" style="height:44px;">+</button>
-          </div>
-          <div class="scroll-panel">
-            <table class="op-table">
-              <thead><tr><th>Matrícula</th><th>Nome</th><th></th></tr></thead>
-              <tbody id="op-tbody"><tr><td colspan="3" style="color:var(--text-faint);">Nenhum operador cadastrado ainda.</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- COLUNA 3: Apontamento de atividades + ranking -->
-      <div class="mesa-col">
-        <div class="panel">
-          <div class="panel-title"><span>GERAR TAREFA</span></div>
-          <div class="field">
-            <label for="tar-codigo">Código do produto</label>
-            <input type="text" id="tar-codigo" placeholder="Ex: 104167">
-          </div>
-          <div class="field">
-            <label for="tar-endereco">Endereço</label>
-            <input type="text" id="tar-endereco" placeholder="Ex: 3.8.31.1">
-          </div>
-          <div class="field">
-            <label for="tar-descricao">Descrição</label>
-            <input type="text" id="tar-descricao" placeholder="Descrição do item">
-          </div>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-            <div class="field">
-              <label for="tar-qtd">Quantidade</label>
-              <input type="text" id="tar-qtd" placeholder="Ex: 20cx">
-            </div>
-            <div class="field">
-              <label for="tar-destino">Destino</label>
-              <input type="text" id="tar-destino" placeholder="Ex: Doca 12">
-            </div>
-          </div>
-          <button class="btn btn-primary" id="btn-criar-tarefa">Criar Tarefa</button>
-          <div class="error-text" id="tarefa-error"></div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title">
-            <span>TAREFAS EM ABERTO / ANDAMENTO</span>
-            <span class="count-pill" id="tarefas-count">0</span>
-          </div>
-          <div id="tarefas-mesa-list" class="scroll-panel">
-            <p style="color:var(--text-faint); font-size:13px;">Nenhuma tarefa criada ainda.</p>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-title"><span>RANKING DE MOVIMENTAÇÕES</span></div>
-          <div id="ranking-list" class="scroll-panel">
-            <p style="color:var(--text-faint); font-size:13px;">Sem dados ainda.</p>
-          </div>
-        </div>
-      </div>
-
     </div>
 
-    <footer class="foot">AJUSTE PULMÃO/APANHA · MESA v1.3</footer>
+    <footer class="foot">AJUSTE PULMÃO/APANHA · MESA v1.4</footer>
   </section>
 
   <!-- ===================== MENU OPERADOR (escolher tipo) ===================== -->
@@ -326,7 +363,7 @@
 
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-<script src="firebase-config.js?v=5"></script>
+<script src="firebase-config.js?v=7"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
   window.addEventListener('error', function (e) {
@@ -340,6 +377,6 @@
     b.textContent = '⚠ ERRO (promise): ' + (e.reason && e.reason.message ? e.reason.message : e.reason);
   });
 </script>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

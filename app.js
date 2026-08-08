@@ -188,6 +188,22 @@ document.getElementById('btn-logout-mesa').addEventListener('click', () => {
   showScreen('role');
 });
 
+// -- navegação entre as páginas da Mesa (sidebar) --
+document.querySelectorAll('.mesa-nav-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mesa-nav-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.mesa-page').forEach(p => p.classList.remove('active'));
+    document.getElementById('mesa-page-' + btn.dataset.page).classList.add('active');
+  });
+});
+
+function atualizarBadge(id, valor) {
+  const el = document.getElementById(id);
+  el.textContent = valor;
+  el.classList.toggle('zero', valor === 0);
+}
+
 function atualizarContadorEnderecos() {
   document.getElementById('qtd-enderecos').textContent = Object.keys(getEnderecosCache()).length;
 }
@@ -227,6 +243,7 @@ function renderPendentesAjustes(lista) {
   const wrap = document.getElementById('pend-ajustes-list');
   const pendentes = lista.filter(a => a.status === 'pendente');
   document.getElementById('pend-count').textContent = pendentes.length;
+  atualizarBadge('nav-badge-ajustes', pendentes.length);
 
   if (pendentes.length === 0) {
     wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhum ajuste pendente.</p>';
@@ -540,8 +557,23 @@ function attachTarefasListener() {
   unsubTarefas = db.collection('tarefas').orderBy('criadoEm', 'desc').limit(200).onSnapshot(
     snap => {
       TAREFAS_CACHE = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // notifica o operador quando a MESA confirma a conclusão de uma tarefa dele
+      if (operador) {
+        snap.docChanges().forEach(change => {
+          if (change.type === 'modified') {
+            const d = change.doc.data();
+            if (d.status === 'concluida' && d.operadorMatricula === operador.matricula && d.notificadoConclusao === false) {
+              mostrarToast(`✓ Sua tarefa "${d.descricao}" foi confirmada pela mesa!`);
+              db.collection('tarefas').doc(change.doc.id).update({ notificadoConclusao: true });
+            }
+          }
+        });
+      }
+
       if (screens.mesa.classList.contains('active')) {
         renderTarefasMesa();
+        renderAguardandoConfirmacao();
         renderRanking();
       }
       if (screens.tarefas.classList.contains('active')) {
@@ -606,26 +638,68 @@ document.getElementById('btn-criar-tarefa').addEventListener('click', async () =
   }
 });
 
-// -- Mesa: lista de tarefas em aberto/andamento --
+// -- Mesa: lista de tarefas em aberto (some daqui assim que um operador seleciona) --
 function renderTarefasMesa() {
   const wrap = document.getElementById('tarefas-mesa-list');
-  const ativas = TAREFAS_CACHE.filter(t => t.status !== 'concluida');
-  document.getElementById('tarefas-count').textContent = ativas.length;
+  const abertas = TAREFAS_CACHE.filter(t => t.status === 'aberta');
+  document.getElementById('tarefas-count').textContent = abertas.length;
 
-  if (ativas.length === 0) {
-    wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhuma tarefa criada ainda.</p>';
+  if (abertas.length === 0) {
+    wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhuma tarefa em aberto.</p>';
     return;
   }
-  wrap.innerHTML = ativas.map(t => `
+  wrap.innerHTML = abertas.map(t => `
     <div class="pend-item">
       <div class="top-row">
-        <span class="badge ${t.status === 'aberta' ? 'pulmao' : 'apanha'}" style="margin:0;">${t.status === 'aberta' ? 'ABERTA' : 'EM ANDAMENTO'}</span>
-        <span class="meta-line">${t.operadorNome ? escapeHtml(t.operadorNome) : '—'}</span>
+        <span class="badge pulmao" style="margin:0;">ABERTA</span>
       </div>
       <div class="desc-line">${escapeHtml(t.descricao || '')}</div>
       <div class="meta-line">End. ${escapeHtml(t.endereco || '')} → ${escapeHtml(t.destino || '')} · Cód. ${escapeHtml(t.codigo || '')} · ${escapeHtml(String(t.qtd || ''))}</div>
     </div>
   `).join('');
+}
+
+// -- Mesa: tarefas finalizadas pelo operador, aguardando confirmação --
+function renderAguardandoConfirmacao() {
+  const wrap = document.getElementById('aguardando-list');
+  const aguardando = TAREFAS_CACHE.filter(t => t.status === 'aguardando_confirmacao');
+  document.getElementById('aguardando-count').textContent = aguardando.length;
+  atualizarBadge('nav-badge-tarefas', aguardando.length);
+
+  if (aguardando.length === 0) {
+    wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nada aguardando confirmação.</p>';
+    return;
+  }
+  wrap.innerHTML = '';
+  aguardando.forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'pend-item';
+    div.innerHTML = `
+      <div class="top-row"><span class="badge apanha" style="margin:0;">FINALIZADA</span><span class="meta-line">${escapeHtml(t.operadorNome || '')}</span></div>
+      <div class="desc-line">${escapeHtml(t.descricao || '')}</div>
+      <div class="meta-line">End. ${escapeHtml(t.endereco || '')} → ${escapeHtml(t.destino || '')} · Cód. ${escapeHtml(t.codigo || '')} · ${escapeHtml(String(t.qtd || ''))}</div>
+      <button class="btn btn-primary" data-id="${t.id}">Confirmar Conclusão</button>
+    `;
+    wrap.appendChild(div);
+  });
+  wrap.querySelectorAll('button[data-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Confirmando…';
+      try {
+        await db.collection('tarefas').doc(btn.dataset.id).update({
+          status: 'concluida',
+          notificadoConclusao: false,
+          confirmadoPor: operador.matricula,
+          concluidoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) {
+        console.error(e);
+        btn.disabled = false;
+        btn.textContent = 'Confirmar Conclusão';
+      }
+    });
+  });
 }
 
 // -- Mesa: ranking de movimentações (tarefas concluídas por operador) --
@@ -775,11 +849,12 @@ document.getElementById('btn-finalizar-tarefa').addEventListener('click', async 
   btn.disabled = true;
   try {
     await db.collection('tarefas').doc(tarefaAtivaId).update({
-      status: 'concluida',
-      concluidoEm: firebase.firestore.FieldValue.serverTimestamp()
+      status: 'aguardando_confirmacao',
+      notificadoConclusao: false,
+      concluidoOperadorEm: firebase.firestore.FieldValue.serverTimestamp()
     });
     tarefaAtivaId = null;
-    mostrarToast('✓ Tarefa finalizada! Contabilizada no seu total.');
+    mostrarToast('Tarefa enviada — aguardando confirmação da mesa.');
   } catch (e) {
     console.error(e);
     mostrarToast('Erro ao finalizar a tarefa.', true);
