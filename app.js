@@ -1,51 +1,13 @@
 // ============================================================
-// Ajuste de Pulmão/Apanha — app.js (MODO LOCAL, sem Firebase)
-// Dados guardados no localStorage. Quando plugarmos o Firebase,
-// só trocamos as funções DB.* por chamadas ao Firestore — o
-// resto do app não muda.
+// Ajuste de Pulmão/Apanha — app.js (Firebase Firestore)
+// A base de endereços é salva em poucos "blocos" (documentos)
+// em vez de 1 documento por endereço — isso evita estourar a
+// cota gratuita de gravações do Firestore num único upload.
+// Operadores e ajustes usam onSnapshot: qualquer mudança feita
+// num aparelho aparece em tempo real nos outros.
 // ============================================================
 
-// ---------------- "Banco de dados" local ----------------
-const DB = {
-  getEnderecos() {
-    return JSON.parse(localStorage.getItem('enderecos') || '{}');
-  },
-  setEnderecos(obj) {
-    localStorage.setItem('enderecos', JSON.stringify(obj));
-  },
-  getOperadores() {
-    return JSON.parse(localStorage.getItem('operadores') || '[]');
-  },
-  setOperadores(arr) {
-    localStorage.setItem('operadores', JSON.stringify(arr));
-  },
-  getAjustes() {
-    return JSON.parse(localStorage.getItem('ajustes') || '[]');
-  },
-  addAjuste(ajuste) {
-    const arr = DB.getAjustes();
-    arr.unshift(ajuste); // mais recente primeiro
-    localStorage.setItem('ajustes', JSON.stringify(arr));
-  }
-};
-
-function seedDadosExemplo() {
-  DB.setEnderecos({
-    '01.1.1.1.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L', tipo: 'apanha' },
-    '01.1.1.2.1': { codigo: '48213', descricao: 'Refrigerante Cola 2L', tipo: 'apanha' },
-    '01.3.8.31.1': { codigo: '51890', descricao: 'Sabão em Pó 1kg', tipo: 'pulmao' },
-    '01.3.8.41.1': { codigo: '51890', descricao: 'Sabão em Pó 1kg', tipo: 'pulmao' }
-  });
-  DB.setOperadores([
-    { matricula: '225946', nome: 'Operador Teste' }
-  ]);
-  localStorage.setItem('ajustes', '[]');
-}
-
-// Primeira vez que o app abre neste navegador: já popula com exemplo
-if (localStorage.getItem('enderecos') === null) {
-  seedDadosExemplo();
-}
+const CHUNK_SIZE = 4000; // endereços por bloco (~4000 fica bem abaixo do limite de 1MB/doc)
 
 // ---------------- Navegação entre telas ----------------
 const screens = {
@@ -65,6 +27,60 @@ let papelSelecionado = null; // 'mesa' | 'operador'
 let operador = null;         // { matricula, nome }
 let tipoAtual = null;        // 'apanha' | 'pulmao'
 let itemEncontrado = null;   // { codigo, descricao } | null
+let enderecoSelecionado = null;
+
+// ---------------- Cache local da base de endereços ----------------
+// Carregada 1x por sessão (login) a partir dos blocos no Firestore,
+// depois toda busca por código é feita na memória (rápido, sem custo).
+let ENDERECOS_CACHE = null;
+
+function getEnderecosCache() { return ENDERECOS_CACHE || {}; }
+
+async function carregarBaseEnderecos() {
+  const metaSnap = await db.collection('meta').doc('enderecos').get();
+  if (!metaSnap.exists) { ENDERECOS_CACHE = {}; return; }
+  const total = metaSnap.data().totalChunks || 0;
+  const promises = [];
+  for (let i = 0; i < total; i++) {
+    promises.push(db.collection('enderecosChunks').doc('chunk_' + i).get());
+  }
+  const snaps = await Promise.all(promises);
+  const merged = {};
+  snaps.forEach(s => {
+    if (s.exists) Object.assign(merged, JSON.parse(s.data().json));
+  });
+  ENDERECOS_CACHE = merged;
+}
+
+// Publica a base inteira em blocos no Firestore (usado pelo upload da Mesa)
+async function publicarBaseEnderecos(base, indexados) {
+  const chaves = Object.keys(base);
+  const chunks = [];
+  for (let i = 0; i < chaves.length; i += CHUNK_SIZE) {
+    const slice = {};
+    chaves.slice(i, i + CHUNK_SIZE).forEach(k => { slice[k] = base[k]; });
+    chunks.push(slice);
+  }
+
+  let chunksAntigos = 0;
+  const metaSnap = await db.collection('meta').doc('enderecos').get();
+  if (metaSnap.exists) chunksAntigos = metaSnap.data().totalChunks || 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    await db.collection('enderecosChunks').doc('chunk_' + i).set({ json: JSON.stringify(chunks[i]) });
+  }
+  for (let i = chunks.length; i < chunksAntigos; i++) {
+    await db.collection('enderecosChunks').doc('chunk_' + i).delete();
+  }
+
+  await db.collection('meta').doc('enderecos').set({
+    totalChunks: chunks.length,
+    totalCount: indexados,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  ENDERECOS_CACHE = base;
+}
 
 // ---------------- Tela 1: escolher papel ----------------
 document.querySelectorAll('#screen-role .choice-card').forEach(card => {
@@ -98,10 +114,11 @@ document.getElementById('in-senha').addEventListener('keydown', e => {
   if (e.key === 'Enter') fazerLogin();
 });
 
-function fazerLogin() {
+async function fazerLogin() {
   const matricula = document.getElementById('in-matricula').value.trim();
   const senha = document.getElementById('in-senha').value.trim();
   const errBox = document.getElementById('login-error');
+  const btn = document.getElementById('btn-login');
   errBox.textContent = '';
 
   if (!matricula || !senha) {
@@ -109,28 +126,45 @@ function fazerLogin() {
     return;
   }
 
-  // MODO LOCAL: qualquer matrícula/senha entra.
-  // (aqui depois entra a checagem real contra o Firestore)
-  const cadastrados = DB.getOperadores();
-  const cadastrado = cadastrados.find(o => o.matricula === matricula);
-  const nome = cadastrado ? cadastrado.nome : ('Matrícula ' + matricula);
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Entrando…';
 
-  operador = { matricula, nome };
+  try {
+    // MODO LIVRE: qualquer matrícula/senha entra.
+    // Só busca o nome cadastrado no Firestore, se existir.
+    let nome = 'Matrícula ' + matricula;
+    try {
+      const doc = await db.collection('operadores').doc(matricula).get();
+      if (doc.exists && doc.data().nome) nome = doc.data().nome;
+    } catch (e) { /* segue sem nome cadastrado */ }
 
-  if (papelSelecionado === 'mesa') {
-    entrarNaMesa();
-  } else {
-    entrarNoMenu();
+    operador = { matricula, nome };
+
+    if (papelSelecionado === 'mesa') {
+      await entrarNaMesa();
+    } else {
+      await entrarNoMenu();
+    }
+  } catch (e) {
+    console.error(e);
+    errBox.textContent = 'Erro ao conectar no Firebase. Confira o firebase-config.js e as regras do Firestore.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Entrar';
   }
 }
 
-// ---------------- Tela Mesa ----------------
-function entrarNaMesa() {
+// ============================================================
+// TELA MESA
+// ============================================================
+async function entrarNaMesa() {
   document.getElementById('mesa-matricula').textContent = '· ' + operador.matricula;
-  renderOperadoresMesa();
-  renderAjustesMesa();
-  atualizarContadorEnderecos();
   showScreen('mesa');
+  document.getElementById('qtd-enderecos').textContent = 'carregando…';
+
+  await carregarBaseEnderecos();
+  atualizarContadorEnderecos();
+  attachMesaListeners();
 }
 
 document.getElementById('btn-logout-mesa').addEventListener('click', () => {
@@ -139,11 +173,36 @@ document.getElementById('btn-logout-mesa').addEventListener('click', () => {
 });
 
 function atualizarContadorEnderecos() {
-  const qtd = Object.keys(DB.getEnderecos()).length;
-  document.getElementById('qtd-enderecos').textContent = qtd;
+  document.getElementById('qtd-enderecos').textContent = Object.keys(getEnderecosCache()).length;
 }
 
-// -- upload de planilha de endereços --
+// -- listeners em tempo real: operadores e ajustes --
+let unsubOperadores = null;
+let unsubAjustes = null;
+
+function attachMesaListeners() {
+  if (unsubOperadores) return; // já ativos, não duplica
+
+  unsubOperadores = db.collection('operadores').orderBy('nome').onSnapshot(
+    snap => {
+      const lista = [];
+      snap.forEach(doc => lista.push({ matricula: doc.id, nome: doc.data().nome || '' }));
+      renderOperadoresMesa(lista);
+    },
+    err => console.error('Erro ao ouvir operadores:', err)
+  );
+
+  unsubAjustes = db.collection('ajustes').orderBy('timestamp', 'desc').limit(30).onSnapshot(
+    snap => {
+      const lista = [];
+      snap.forEach(doc => lista.push(doc.data()));
+      renderAjustesMesa(lista);
+    },
+    err => console.error('Erro ao ouvir ajustes:', err)
+  );
+}
+
+// -- upload de planilha/arquivo de endereços --
 let arquivoSelecionado = null;
 
 document.getElementById('in-file').addEventListener('change', (e) => {
@@ -214,7 +273,6 @@ function lerTextoDelimitado(file) {
         texto = texto.replace(/^\uFEFF/, ''); // remove BOM se existir
         const linhas = texto.split(/\r\n|\n|\r/).filter(l => l.length > 0);
         if (linhas.length === 0) { resolve([]); return; }
-        // detecta delimitador pela linha de cabeçalho
         const candidatos = [';', ',', '\t'];
         const header = linhas[0];
         let delim = ';';
@@ -225,7 +283,6 @@ function lerTextoDelimitado(file) {
         });
         const rows = linhas.map(l => l.split(delim).map(c => c.trim()));
         console.log('[lerTextoDelimitado] delimitador detectado:', JSON.stringify(delim), '| colunas no cabeçalho:', rows[0].length);
-        console.log('[lerTextoDelimitado] cabeçalho bruto:', rows[0]);
         resolve(rows);
       } catch (err) { reject(err); }
     };
@@ -234,14 +291,13 @@ function lerTextoDelimitado(file) {
   });
 }
 
-// -- parser específico do arquivo "Posição de Endereços" (mesmo formato dos outros projetos) --
+// -- parser específico do arquivo "Posição de Endereços" --
 function ehPosicaoDeEnderecos(headerRow) {
   const normalized = headerRow.map(normalizarHeader);
-  console.log('[ehPosicaoDeEnderecos] cabeçalho normalizado:', normalized);
   return normalized.includes('codrua') && normalized.includes('nropredio') && normalized.includes('especie_end');
 }
 
-function processarPosicaoDeEnderecos(rows, onProgress) {
+function processarPosicaoDeEnderecos(rows) {
   const header = rows[0].map(normalizarHeader);
   const idx = {
     deposito: header.indexOf('deposito'),
@@ -263,7 +319,7 @@ function processarPosicaoDeEnderecos(rows, onProgress) {
     const r = rows[i];
     const status = (r[idx.status] || '').trim();
     const codigo = (r[idx.codigo] || '').trim();
-    if (status !== 'Ocupado' || !codigo) continue; // só endereços ocupados com item
+    if (status !== 'Ocupado' || !codigo) continue;
 
     const dep = (r[idx.deposito] || '01').trim();
     const key = [
@@ -281,11 +337,9 @@ function processarPosicaoDeEnderecos(rows, onProgress) {
       tipo: especie === 'Apanha' ? 'apanha' : 'pulmao'
     };
     indexados++;
-    if (onProgress && indexados % 2000 === 0) onProgress(i, total, indexados);
   }
   return { base, indexados, total };
 }
-
 
 document.getElementById('btn-upload').addEventListener('click', async () => {
   if (!arquivoSelecionado) return;
@@ -298,7 +352,7 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
   statusEl.style.color = 'var(--text-dim)';
   statusEl.textContent = 'Lendo arquivo…';
   progWrap.style.display = 'block';
-  progBar.style.width = '0%';
+  progBar.style.width = '10%';
 
   try {
     const nomeArquivo = arquivoSelecionado.name.toLowerCase();
@@ -310,16 +364,11 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
     let base, indexados, total;
 
     if (ehPosicaoDeEnderecos(rows[0])) {
-      // formato "Posição de Endereços" (o mesmo dos outros projetos)
       statusEl.textContent = 'Processando Posição de Endereços…';
-      const resultado = processarPosicaoDeEnderecos(rows, (i, tot, idx) => {
-        const pct = Math.round((i / tot) * 100);
-        progBar.style.width = pct + '%';
-        statusEl.textContent = `Processando… ${idx} endereços ocupados encontrados`;
-      });
+      progBar.style.width = '30%';
+      const resultado = processarPosicaoDeEnderecos(rows);
       base = resultado.base; indexados = resultado.indexados; total = resultado.total;
     } else {
-      // fallback: planilha genérica com colunas Endereço/Código/Descrição
       const cols = identificarColunas(rows[0]);
       if (cols.endereco === -1 || cols.codigo === -1 || cols.descricao === -1) {
         throw new Error('Não reconheci esse formato — nem é "Posição de Endereços" nem tem colunas de Endereço/Código/Descrição.');
@@ -342,15 +391,14 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
 
     if (indexados === 0) throw new Error('Nenhum endereço ocupado/válido encontrado no arquivo.');
 
-    try {
-      DB.setEnderecos(base);
-    } catch (quotaErr) {
-      throw new Error('A base ficou grande demais pro navegador guardar (localStorage cheio). Isso vai se resolver quando migrarmos pro Firebase — por ora, tente um arquivo menor.');
-    }
+    statusEl.textContent = `Enviando ${indexados} endereços pro Firebase (em blocos)…`;
+    progBar.style.width = '60%';
+
+    await publicarBaseEnderecos(base, indexados);
 
     progBar.style.width = '100%';
     statusEl.style.color = 'var(--green)';
-    statusEl.textContent = `✓ Base atualizada: ${indexados} endereços salvos (de ${total} linhas lidas).`;
+    statusEl.textContent = `✓ Base atualizada: ${indexados} endereços salvos no Firebase (de ${total} linhas lidas). Já vale pra todos os aparelhos.`;
     atualizarContadorEnderecos();
   } catch (e) {
     console.error(e);
@@ -361,90 +409,92 @@ document.getElementById('btn-upload').addEventListener('click', async () => {
   }
 });
 
-// -- cadastro de operadores (informativo, local) --
-function renderOperadoresMesa() {
-  const lista = DB.getOperadores();
+// -- cadastro de operadores (Firestore, tempo real) --
+function renderOperadoresMesa(lista) {
   const tbody = document.getElementById('op-tbody');
   if (lista.length === 0) {
     tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text-faint);">Nenhum operador cadastrado ainda.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
-  lista.forEach((op, idx) => {
+  lista.forEach(op => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="mono">${escapeHtml(op.matricula)}</td>
       <td>${escapeHtml(op.nome)}</td>
-      <td><button class="link-btn" data-idx="${idx}">Remover</button></td>
+      <td><button class="link-btn" data-matricula="${op.matricula}">Remover</button></td>
     `;
     tbody.appendChild(tr);
   });
-  tbody.querySelectorAll('button[data-idx]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const arr = DB.getOperadores();
-      arr.splice(Number(btn.dataset.idx), 1);
-      DB.setOperadores(arr);
-      renderOperadoresMesa();
+  tbody.querySelectorAll('button[data-matricula]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await db.collection('operadores').doc(btn.dataset.matricula).delete();
     });
   });
 }
 
-document.getElementById('btn-add-op').addEventListener('click', () => {
+document.getElementById('btn-add-op').addEventListener('click', async () => {
   const matricula = document.getElementById('op-matricula').value.trim();
   const nome = document.getElementById('op-nome').value.trim();
   if (!matricula || !nome) return;
-  const arr = DB.getOperadores();
-  if (arr.some(o => o.matricula === matricula)) {
-    arr.forEach(o => { if (o.matricula === matricula) o.nome = nome; });
-  } else {
-    arr.push({ matricula, nome });
-  }
-  DB.setOperadores(arr);
+  await db.collection('operadores').doc(matricula).set({ nome }, { merge: true });
   document.getElementById('op-matricula').value = '';
   document.getElementById('op-nome').value = '';
-  renderOperadoresMesa();
 });
 
-// -- log de ajustes na tela da mesa --
-function renderAjustesMesa() {
-  const lista = DB.getAjustes();
+// -- log de ajustes na tela da mesa (Firestore, tempo real) --
+function renderAjustesMesa(lista) {
   const tbody = document.getElementById('ajustes-tbody');
   if (lista.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-faint);">Nenhum ajuste registrado ainda.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
-  lista.slice(0, 30).forEach(a => {
+  lista.forEach(a => {
     const tr = document.createElement('tr');
-    const hora = new Date(a.timestamp).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const ts = (a.timestamp && a.timestamp.toDate) ? a.timestamp.toDate() : new Date();
+    const hora = ts.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     tr.innerHTML = `
       <td class="mono">${hora}</td>
-      <td>${escapeHtml(a.matricula)}</td>
-      <td><span class="badge ${a.tipo}" style="margin:0;">${a.tipo.toUpperCase()}</span></td>
-      <td class="mono">${escapeHtml(a.endereco)}</td>
-      <td>${escapeHtml(a.descricao)}</td>
+      <td>${escapeHtml(a.matricula || '')}</td>
+      <td><span class="badge ${a.tipo}" style="margin:0;">${(a.tipo || '').toUpperCase()}</span></td>
+      <td class="mono">${escapeHtml(a.endereco || '')}</td>
+      <td>${escapeHtml(a.descricao || '')}</td>
       <td class="mono">${a.qtd}cx</td>
     `;
     tbody.appendChild(tr);
   });
 }
 
-document.getElementById('btn-reset-dados').addEventListener('click', () => {
-  if (confirm('Isso apaga os dados locais (endereços, operadores, ajustes) e recarrega os dados de exemplo. Continuar?')) {
-    seedDadosExemplo();
-    renderOperadoresMesa();
-    renderAjustesMesa();
-    atualizarContadorEnderecos();
-  }
-});
-
 // ============================================================
 // FLUXO DO OPERADOR
 // ============================================================
-function entrarNoMenu() {
+async function entrarNoMenu() {
   document.getElementById('menu-nome').textContent = operador.nome;
   showScreen('menu');
+  setMenuCarregando(true);
+  try {
+    await carregarBaseEnderecos();
+  } catch (e) {
+    console.error(e);
+  }
+  setMenuCarregando(false);
 }
+
+function setMenuCarregando(carregando) {
+  const grid = document.querySelector('#screen-menu .choice-grid');
+  const aviso = document.getElementById('menu-carregando');
+  if (carregando) {
+    grid.style.opacity = '0.4';
+    grid.style.pointerEvents = 'none';
+    aviso.style.display = 'block';
+  } else {
+    grid.style.opacity = '1';
+    grid.style.pointerEvents = 'auto';
+    aviso.style.display = 'none';
+  }
+}
+
 document.getElementById('btn-logout-op').addEventListener('click', () => {
   operador = null;
   showScreen('role');
@@ -481,8 +531,6 @@ function resetLookupBox() {
   box.innerHTML = '<span class="placeholder">Digite o código para ver os endereços…</span>';
 }
 
-let enderecoSelecionado = null; // endereço "amigável" (sem depósito) escolhido na lista
-
 document.getElementById('in-codigo').addEventListener('input', () => {
   const codigo = document.getElementById('in-codigo').value.trim();
   itemEncontrado = null;
@@ -504,7 +552,6 @@ document.getElementById('in-codigo').addEventListener('input', () => {
   }
 
   if (resultados.length === 1) {
-    // só tem um endereço pra esse código: já seleciona direto
     listaEl.innerHTML = '';
     selecionarEndereco(resultados[0]);
     return;
@@ -513,10 +560,8 @@ document.getElementById('in-codigo').addEventListener('input', () => {
   renderListaEnderecos(resultados);
 });
 
-// Busca todos os endereços que guardam o código informado, filtrando pelo
-// tipo (apanha/pulmao) da tela atual, em ordem crescente de endereço.
 function buscarPorCodigo(codigo, tipo) {
-  const base = DB.getEnderecos();
+  const base = getEnderecosCache();
   const resultados = [];
   for (const key in base) {
     const item = base[key];
@@ -533,13 +578,11 @@ function buscarPorCodigo(codigo, tipo) {
   return resultados;
 }
 
-// remove o prefixo de depósito da chave interna (ex: "01.3.8.31.1" -> "3.8.31.1")
 function keyParaEnderecoAmigavel(key) {
   const partes = key.split('.');
   return partes.length > 1 ? partes.slice(1).join('.') : key;
 }
 
-// ordena chaves de endereço numericamente, segmento a segmento
 function compararEnderecos(keyA, keyB) {
   const a = keyA.split('.').map(Number);
   const b = keyB.split('.').map(Number);
@@ -604,25 +647,38 @@ document.getElementById('btn-confirmar').addEventListener('click', () => {
 });
 document.getElementById('modal-nao').addEventListener('click', () => modal.classList.remove('active'));
 
-document.getElementById('modal-sim').addEventListener('click', () => {
+document.getElementById('modal-sim').addEventListener('click', async () => {
+  const btnSim = document.getElementById('modal-sim');
+  btnSim.disabled = true;
+  btnSim.innerHTML = '<span class="spinner"></span>Salvando…';
+
   const endereco = enderecoSelecionado;
   const qtd = parseInt(document.getElementById('in-qtd').value, 10);
 
-  DB.addAjuste({
-    matricula: operador.matricula,
-    nome: operador.nome,
-    tipo: tipoAtual,
-    endereco,
-    codigo: itemEncontrado.codigo,
-    descricao: itemEncontrado.descricao,
-    qtd,
-    timestamp: Date.now()
-  });
+  try {
+    await db.collection('ajustes').add({
+      matricula: operador.matricula,
+      nome: operador.nome,
+      tipo: tipoAtual,
+      endereco,
+      codigo: itemEncontrado.codigo,
+      descricao: itemEncontrado.descricao,
+      qtd,
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    });
 
-  modal.classList.remove('active');
-  document.getElementById('success-desc').textContent = `${itemEncontrado.descricao} · ${qtd}cx · ${endereco}`;
-  showScreen('success');
-  setTimeout(() => showScreen('menu'), 2200);
+    modal.classList.remove('active');
+    document.getElementById('success-desc').textContent = `${itemEncontrado.descricao} · ${qtd}cx · ${endereco}`;
+    showScreen('success');
+    setTimeout(() => showScreen('menu'), 2200);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('form-error').textContent = 'Erro ao salvar. Confira a internet e tente de novo.';
+    modal.classList.remove('active');
+  } finally {
+    btnSim.disabled = false;
+    btnSim.textContent = 'Sim';
+  }
 });
 
 function escapeHtml(str) {
