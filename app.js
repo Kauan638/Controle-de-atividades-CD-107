@@ -17,6 +17,7 @@ const screens = {
   menu: document.getElementById('screen-menu'),
   form: document.getElementById('screen-form'),
   success: document.getElementById('screen-success'),
+  tarefas: document.getElementById('screen-tarefas'),
 };
 function showScreen(name) {
   Object.values(screens).forEach(s => s.classList.remove('active'));
@@ -28,6 +29,18 @@ let operador = null;         // { matricula, nome }
 let tipoAtual = null;        // 'apanha' | 'pulmao'
 let itemEncontrado = null;   // { codigo, descricao } | null
 let enderecoSelecionado = null;
+
+// ---------------- Toast (avisos flutuantes) ----------------
+let toastTimer = null;
+function mostrarToast(msg, erro) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.borderColor = erro ? 'var(--red)' : 'var(--green)';
+  el.style.background = erro ? 'var(--red-dim)' : 'var(--green-dim)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 4500);
+}
 
 // ---------------- Cache local da base de endereços ----------------
 // Carregada 1x por sessão (login) a partir dos blocos no Firestore,
@@ -159,16 +172,19 @@ async function fazerLogin() {
 // ============================================================
 async function entrarNaMesa() {
   document.getElementById('mesa-matricula').textContent = '· ' + operador.matricula;
+  document.getElementById('app').classList.add('mesa-wide');
   showScreen('mesa');
   document.getElementById('qtd-enderecos').textContent = 'carregando…';
 
   await carregarBaseEnderecos();
   atualizarContadorEnderecos();
   attachMesaListeners();
+  attachTarefasListener();
 }
 
 document.getElementById('btn-logout-mesa').addEventListener('click', () => {
   operador = null;
+  document.getElementById('app').classList.remove('mesa-wide');
   showScreen('role');
 });
 
@@ -179,6 +195,7 @@ function atualizarContadorEnderecos() {
 // -- listeners em tempo real: operadores e ajustes --
 let unsubOperadores = null;
 let unsubAjustes = null;
+let OPERADORES_CACHE = [];
 
 function attachMesaListeners() {
   if (unsubOperadores) return; // já ativos, não duplica
@@ -187,19 +204,64 @@ function attachMesaListeners() {
     snap => {
       const lista = [];
       snap.forEach(doc => lista.push({ matricula: doc.id, nome: doc.data().nome || '' }));
+      OPERADORES_CACHE = lista;
       renderOperadoresMesa(lista);
+      renderRanking();
     },
     err => console.error('Erro ao ouvir operadores:', err)
   );
 
-  unsubAjustes = db.collection('ajustes').orderBy('timestamp', 'desc').limit(30).onSnapshot(
+  unsubAjustes = db.collection('ajustes').orderBy('timestamp', 'desc').limit(100).onSnapshot(
     snap => {
       const lista = [];
-      snap.forEach(doc => lista.push(doc.data()));
-      renderAjustesMesa(lista);
+      snap.forEach(doc => lista.push({ id: doc.id, ...doc.data() }));
+      renderPendentesAjustes(lista);
+      renderAjustesMesa(lista.filter(a => a.status === 'concluido'));
     },
     err => console.error('Erro ao ouvir ajustes:', err)
   );
+}
+
+// -- ajustes pendentes de confirmação da mesa --
+function renderPendentesAjustes(lista) {
+  const wrap = document.getElementById('pend-ajustes-list');
+  const pendentes = lista.filter(a => a.status === 'pendente');
+  document.getElementById('pend-count').textContent = pendentes.length;
+
+  if (pendentes.length === 0) {
+    wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhum ajuste pendente.</p>';
+    return;
+  }
+  wrap.innerHTML = '';
+  pendentes.forEach(a => {
+    const div = document.createElement('div');
+    div.className = 'pend-item';
+    div.innerHTML = `
+      <div class="top-row"><span class="badge ${a.tipo}" style="margin:0;">${(a.tipo || '').toUpperCase()}</span><span class="meta-line">Op. ${escapeHtml(a.matricula || '')}</span></div>
+      <div class="desc-line">${escapeHtml(a.descricao || '')}</div>
+      <div class="meta-line">Endereço ${escapeHtml(a.endereco || '')} · Cód. ${escapeHtml(a.codigo || '')} · ${a.qtd}cx</div>
+      <button class="btn btn-primary" data-id="${a.id}">Confirmar Ajuste</button>
+    `;
+    wrap.appendChild(div);
+  });
+  wrap.querySelectorAll('button[data-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = 'Confirmando…';
+      try {
+        await db.collection('ajustes').doc(btn.dataset.id).update({
+          status: 'concluido',
+          notificado: false,
+          resolvidoPor: operador.matricula,
+          resolvidoEm: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e) {
+        console.error(e);
+        btn.disabled = false;
+        btn.textContent = 'Confirmar Ajuste';
+      }
+    });
+  });
 }
 
 // -- upload de planilha/arquivo de endereços --
@@ -442,11 +504,11 @@ document.getElementById('btn-add-op').addEventListener('click', async () => {
   document.getElementById('op-nome').value = '';
 });
 
-// -- log de ajustes na tela da mesa (Firestore, tempo real) --
+// -- log de ajustes concluídos na tela da mesa (Firestore, tempo real) --
 function renderAjustesMesa(lista) {
   const tbody = document.getElementById('ajustes-tbody');
   if (lista.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-faint);">Nenhum ajuste registrado ainda.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-faint);">Nenhum ajuste concluído ainda.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -467,6 +529,286 @@ function renderAjustesMesa(lista) {
 }
 
 // ============================================================
+// APONTAMENTO DE ATIVIDADES (tarefas)
+// ============================================================
+let TAREFAS_CACHE = [];
+let unsubTarefas = null;
+let tarefaAtivaId = null;
+
+function attachTarefasListener() {
+  if (unsubTarefas) return;
+  unsubTarefas = db.collection('tarefas').orderBy('criadoEm', 'desc').limit(200).onSnapshot(
+    snap => {
+      TAREFAS_CACHE = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (screens.mesa.classList.contains('active')) {
+        renderTarefasMesa();
+        renderRanking();
+      }
+      if (screens.tarefas.classList.contains('active')) {
+        renderTarefasOperador();
+      }
+    },
+    err => console.error('Erro ao ouvir tarefas:', err)
+  );
+}
+
+// -- Mesa: criar tarefa --
+document.getElementById('tar-codigo').addEventListener('blur', () => {
+  const codigo = document.getElementById('tar-codigo').value.trim();
+  if (!codigo) return;
+  const base = getEnderecosCache();
+  for (const key in base) {
+    if (base[key].codigo === codigo) {
+      if (!document.getElementById('tar-descricao').value.trim()) {
+        document.getElementById('tar-descricao').value = base[key].descricao;
+      }
+      if (!document.getElementById('tar-endereco').value.trim()) {
+        document.getElementById('tar-endereco').value = keyParaEnderecoAmigavel(key);
+      }
+      break;
+    }
+  }
+});
+
+document.getElementById('btn-criar-tarefa').addEventListener('click', async () => {
+  const codigo = document.getElementById('tar-codigo').value.trim();
+  const endereco = document.getElementById('tar-endereco').value.trim();
+  const descricao = document.getElementById('tar-descricao').value.trim();
+  const qtd = document.getElementById('tar-qtd').value.trim();
+  const destino = document.getElementById('tar-destino').value.trim();
+  const errEl = document.getElementById('tarefa-error');
+  errEl.textContent = '';
+
+  if (!codigo || !endereco || !descricao || !qtd || !destino) {
+    errEl.textContent = 'Preencha todos os campos.';
+    return;
+  }
+
+  const btn = document.getElementById('btn-criar-tarefa');
+  btn.disabled = true;
+  try {
+    await db.collection('tarefas').add({
+      codigo, endereco, descricao, qtd, destino,
+      status: 'aberta',
+      operadorMatricula: null,
+      operadorNome: null,
+      criadoPor: operador.matricula,
+      criadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    ['tar-codigo', 'tar-endereco', 'tar-descricao', 'tar-qtd', 'tar-destino'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+  } catch (e) {
+    console.error(e);
+    errEl.textContent = 'Erro ao criar tarefa.';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// -- Mesa: lista de tarefas em aberto/andamento --
+function renderTarefasMesa() {
+  const wrap = document.getElementById('tarefas-mesa-list');
+  const ativas = TAREFAS_CACHE.filter(t => t.status !== 'concluida');
+  document.getElementById('tarefas-count').textContent = ativas.length;
+
+  if (ativas.length === 0) {
+    wrap.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhuma tarefa criada ainda.</p>';
+    return;
+  }
+  wrap.innerHTML = ativas.map(t => `
+    <div class="pend-item">
+      <div class="top-row">
+        <span class="badge ${t.status === 'aberta' ? 'pulmao' : 'apanha'}" style="margin:0;">${t.status === 'aberta' ? 'ABERTA' : 'EM ANDAMENTO'}</span>
+        <span class="meta-line">${t.operadorNome ? escapeHtml(t.operadorNome) : '—'}</span>
+      </div>
+      <div class="desc-line">${escapeHtml(t.descricao || '')}</div>
+      <div class="meta-line">End. ${escapeHtml(t.endereco || '')} → ${escapeHtml(t.destino || '')} · Cód. ${escapeHtml(t.codigo || '')} · ${escapeHtml(String(t.qtd || ''))}</div>
+    </div>
+  `).join('');
+}
+
+// -- Mesa: ranking de movimentações (tarefas concluídas por operador) --
+function renderRanking() {
+  const el = document.getElementById('ranking-list');
+  const counts = {};
+  OPERADORES_CACHE.forEach(op => { counts[op.matricula] = { nome: op.nome, count: 0 }; });
+  TAREFAS_CACHE.forEach(t => {
+    if (t.status === 'concluida' && t.operadorMatricula) {
+      if (!counts[t.operadorMatricula]) counts[t.operadorMatricula] = { nome: t.operadorNome || t.operadorMatricula, count: 0 };
+      counts[t.operadorMatricula].count++;
+    }
+  });
+  const arr = Object.entries(counts).map(([matricula, v]) => ({ matricula, nome: v.nome, count: v.count }));
+  arr.sort((a, b) => b.count - a.count);
+
+  if (arr.length === 0) {
+    el.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Sem dados ainda.</p>';
+    return;
+  }
+  el.innerHTML = arr.map((r, i) => `
+    <div class="rank-row">
+      <span class="rank-pos">${i + 1}º</span>
+      <span class="rank-name">${escapeHtml(r.nome)}</span>
+      <span class="rank-count">${r.count}</span>
+    </div>
+  `).join('');
+}
+
+// -- Operador: puxar / ver tarefa ativa --
+document.getElementById('btn-ir-tarefas').addEventListener('click', () => {
+  showScreen('tarefas');
+  document.getElementById('tarefas-nome').textContent = operador.nome;
+  renderTarefasOperador();
+});
+document.getElementById('btn-voltar-menu-tarefas').addEventListener('click', () => showScreen('menu'));
+
+function renderTarefasOperador() {
+  if (!operador) return;
+  const minhaAtiva = TAREFAS_CACHE.find(t => t.status === 'selecionada' && t.operadorMatricula === operador.matricula);
+  const poolView = document.getElementById('tarefas-pool-view');
+  const ativaView = document.getElementById('tarefas-ativa-view');
+
+  if (minhaAtiva) {
+    tarefaAtivaId = minhaAtiva.id;
+    poolView.style.display = 'none';
+    ativaView.style.display = 'block';
+    document.getElementById('tarefa-ativa-card').innerHTML = `
+      <div class="task-desc">${escapeHtml(minhaAtiva.descricao || '')}</div>
+      <div class="task-row"><span class="lbl">Código</span><span class="val">${escapeHtml(minhaAtiva.codigo || '')}</span></div>
+      <div class="task-row"><span class="lbl">Endereço</span><span class="val">${escapeHtml(minhaAtiva.endereco || '')}</span></div>
+      <div class="task-row"><span class="lbl">Quantidade</span><span class="val">${escapeHtml(String(minhaAtiva.qtd || ''))}</span></div>
+      <div class="task-row"><span class="lbl">Destino</span><span class="val">${escapeHtml(minhaAtiva.destino || '')}</span></div>
+    `;
+  } else {
+    tarefaAtivaId = null;
+    ativaView.style.display = 'none';
+    poolView.style.display = 'block';
+    const abertas = TAREFAS_CACHE.filter(t => t.status === 'aberta');
+    const listEl = document.getElementById('tarefas-pool-list');
+    if (abertas.length === 0) {
+      listEl.innerHTML = '<p style="color:var(--text-faint); font-size:13px;">Nenhuma tarefa em aberto no momento.</p>';
+      return;
+    }
+    listEl.innerHTML = '';
+    abertas.forEach(t => {
+      const div = document.createElement('div');
+      div.className = 'task-card';
+      div.innerHTML = `
+        <div class="task-desc">${escapeHtml(t.descricao || '')}</div>
+        <div class="task-meta">Cód. ${escapeHtml(t.codigo || '')} · End. ${escapeHtml(t.endereco || '')} → ${escapeHtml(t.destino || '')} · ${escapeHtml(String(t.qtd || ''))}</div>
+      `;
+      div.addEventListener('click', () => abrirModalSelecionarTarefa(t));
+      listEl.appendChild(div);
+    });
+  }
+}
+
+let tarefaParaSelecionar = null;
+function abrirModalSelecionarTarefa(t) {
+  tarefaParaSelecionar = t;
+  document.getElementById('modal-tarefa-desc').textContent = `${t.descricao} · End. ${t.endereco} → ${t.destino}`;
+  document.getElementById('modal-selecionar-tarefa').classList.add('active');
+}
+document.getElementById('modal-tarefa-nao').addEventListener('click', () => {
+  document.getElementById('modal-selecionar-tarefa').classList.remove('active');
+});
+document.getElementById('modal-tarefa-sim').addEventListener('click', async () => {
+  document.getElementById('modal-selecionar-tarefa').classList.remove('active');
+  if (tarefaParaSelecionar) await selecionarTarefa(tarefaParaSelecionar.id);
+  tarefaParaSelecionar = null;
+});
+
+// Transação evita que 2 operadores peguem a mesma tarefa ao mesmo tempo
+async function selecionarTarefa(tarefaId) {
+  try {
+    await db.runTransaction(async (tx) => {
+      const ref = db.collection('tarefas').doc(tarefaId);
+      const snap = await tx.get(ref);
+      if (!snap.exists || snap.data().status !== 'aberta') {
+        throw new Error('JA_SELECIONADA');
+      }
+      tx.update(ref, {
+        status: 'selecionada',
+        operadorMatricula: operador.matricula,
+        operadorNome: operador.nome,
+        atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    mostrarToast('✓ Tarefa selecionada!');
+  } catch (e) {
+    if (e.message === 'JA_SELECIONADA') {
+      mostrarToast('Essa tarefa já foi selecionada por outro operador.', true);
+    } else {
+      console.error(e);
+      mostrarToast('Erro ao selecionar a tarefa.', true);
+    }
+  }
+}
+
+document.getElementById('btn-retornar-tarefa').addEventListener('click', () => {
+  document.getElementById('modal-retornar-tarefa').classList.add('active');
+});
+document.getElementById('modal-retornar-nao').addEventListener('click', () => {
+  document.getElementById('modal-retornar-tarefa').classList.remove('active');
+});
+document.getElementById('modal-retornar-sim').addEventListener('click', async () => {
+  document.getElementById('modal-retornar-tarefa').classList.remove('active');
+  if (!tarefaAtivaId) return;
+  try {
+    await db.collection('tarefas').doc(tarefaAtivaId).update({
+      status: 'aberta',
+      operadorMatricula: null,
+      operadorNome: null,
+      atualizadoEm: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    tarefaAtivaId = null;
+  } catch (e) {
+    console.error(e);
+    mostrarToast('Erro ao retornar a tarefa.', true);
+  }
+});
+
+document.getElementById('btn-finalizar-tarefa').addEventListener('click', async () => {
+  if (!tarefaAtivaId) return;
+  const btn = document.getElementById('btn-finalizar-tarefa');
+  btn.disabled = true;
+  try {
+    await db.collection('tarefas').doc(tarefaAtivaId).update({
+      status: 'concluida',
+      concluidoEm: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    tarefaAtivaId = null;
+    mostrarToast('✓ Tarefa finalizada! Contabilizada no seu total.');
+  } catch (e) {
+    console.error(e);
+    mostrarToast('Erro ao finalizar a tarefa.', true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// -- Operador: notificação quando a mesa confirma um ajuste solicitado --
+let unsubMeusAjustes = null;
+function attachNotificacaoAjustes() {
+  if (unsubMeusAjustes) return;
+  unsubMeusAjustes = db.collection('ajustes').where('matricula', '==', operador.matricula).onSnapshot(
+    snap => {
+      snap.docChanges().forEach(change => {
+        if (change.type === 'modified') {
+          const d = change.doc.data();
+          if (d.status === 'concluido' && d.notificado === false) {
+            mostrarToast(`✓ Seu ajuste de "${d.descricao}" (${d.endereco}) foi confirmado pela mesa!`);
+            db.collection('ajustes').doc(change.doc.id).update({ notificado: true });
+          }
+        }
+      });
+    },
+    err => console.error('Erro ao ouvir meus ajustes:', err)
+  );
+}
+
+// ============================================================
 // FLUXO DO OPERADOR
 // ============================================================
 async function entrarNoMenu() {
@@ -479,6 +821,8 @@ async function entrarNoMenu() {
     console.error(e);
   }
   setMenuCarregando(false);
+  attachTarefasListener();
+  attachNotificacaoAjustes();
 }
 
 function setMenuCarregando(carregando) {
@@ -500,7 +844,7 @@ document.getElementById('btn-logout-op').addEventListener('click', () => {
   showScreen('role');
 });
 
-document.querySelectorAll('#screen-menu .choice-card').forEach(card => {
+document.querySelectorAll('#screen-menu .choice-card[data-tipo]').forEach(card => {
   card.addEventListener('click', () => abrirForm(card.dataset.tipo));
 });
 
@@ -664,13 +1008,15 @@ document.getElementById('modal-sim').addEventListener('click', async () => {
       codigo: itemEncontrado.codigo,
       descricao: itemEncontrado.descricao,
       qtd,
+      status: 'pendente',
+      notificado: true,
       timestamp: firebase.firestore.FieldValue.serverTimestamp()
     });
 
     modal.classList.remove('active');
-    document.getElementById('success-desc').textContent = `${itemEncontrado.descricao} · ${qtd}cx · ${endereco}`;
+    document.getElementById('success-desc').textContent = `${itemEncontrado.descricao} · ${qtd}cx · ${endereco} — aguardando confirmação da mesa`;
     showScreen('success');
-    setTimeout(() => showScreen('menu'), 2200);
+    setTimeout(() => showScreen('menu'), 2500);
   } catch (e) {
     console.error(e);
     document.getElementById('form-error').textContent = 'Erro ao salvar. Confira a internet e tente de novo.';
