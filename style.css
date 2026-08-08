@@ -201,6 +201,21 @@ body {
 }
 .choice-card.apanha:hover, .choice-card.apanha.sel { border-color: var(--blue); background: var(--blue-dim); }
 .choice-card.pulmao:hover, .choice-card.pulmao.sel { border-color: var(--green); background: var(--green-dim); }
+.choice-card.mesa:hover, .choice-card.mesa.sel { border-color: var(--amber); background: var(--amber-dim); }
+.choice-card.operador:hover, .choice-card.operador.sel { border-color: var(--blue); background: var(--blue-dim); }
+
+/* ---------- Tag "modo local" ---------- */
+.local-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-faint);
+  border: 1px dashed var(--border-light);
+  border-radius: 20px;
+  padding: 3px 10px;
+  margin-top: 10px;
+}
 
 /* ---------- Lookup result ---------- */
 .lookup-box {
