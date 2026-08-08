@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Ajuste de Pulmão/Apanha — CD-107</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<div id="app">
+
+  <!-- ===================== LOGIN ===================== -->
+  <section id="screen-login" class="screen active">
+    <div class="brand">
+      <div class="eyebrow">CD-107 · Logística</div>
+      <h1>Ajuste de<br>Pulmão / Apanha</h1>
+    </div>
+    <div class="panel">
+      <div class="field">
+        <label for="in-matricula">Matrícula</label>
+        <input type="tel" inputmode="numeric" id="in-matricula" placeholder="Ex: 225946" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="in-senha">Senha</label>
+        <input type="password" id="in-senha" placeholder="••••••" autocomplete="off">
+      </div>
+      <button class="btn btn-primary" id="btn-login">Entrar</button>
+      <div class="error-text" id="login-error"></div>
+    </div>
+    <footer class="foot">AJUSTE PULMÃO/APANHA · v1.0</footer>
+  </section>
+
+  <!-- ===================== MENU (escolher tipo) ===================== -->
+  <section id="screen-menu" class="screen">
+    <div class="topbar">
+      <div class="who">Olá, <span id="menu-nome">—</span><span id="menu-matricula"></span></div>
+      <button class="link-btn" id="btn-logout">Sair</button>
+    </div>
+    <div class="brand" style="margin-bottom:18px;">
+      <div class="eyebrow">O que você precisa ajustar?</div>
+    </div>
+    <div class="choice-grid">
+      <div class="choice-card apanha" data-tipo="apanha">
+        <span class="icon">📦</span>
+        <span class="label">Apanha</span>
+      </div>
+      <div class="choice-card pulmao" data-tipo="pulmao">
+        <span class="icon">🧱</span>
+        <span class="label">Pulmão</span>
+      </div>
+    </div>
+    <footer class="foot">AJUSTE PULMÃO/APANHA · v1.0</footer>
+  </section>
+
+  <!-- ===================== FORM ===================== -->
+  <section id="screen-form" class="screen">
+    <div class="topbar">
+      <div class="who">Olá, <span id="form-nome">—</span></div>
+      <button class="link-btn" id="btn-voltar-menu">← Voltar</button>
+    </div>
+    <span class="badge" id="form-badge">APANHA</span>
+    <div class="panel">
+      <div class="field">
+        <label for="in-endereco">Endereço</label>
+        <input type="text" id="in-endereco" placeholder="Ex: 60.121.2.1" autocomplete="off">
+      </div>
+
+      <div class="lookup-box" id="lookup-box">
+        <span class="placeholder">Digite o endereço para buscar o item…</span>
+      </div>
+
+      <div class="field">
+        <label for="in-qtd">Quantidade (cx)</label>
+        <input type="tel" inputmode="numeric" id="in-qtd" placeholder="Ex: 10">
+      </div>
+
+      <button class="btn btn-primary" id="btn-confirmar" disabled>Confirmar Ajuste</button>
+      <div class="error-text" id="form-error"></div>
+    </div>
+    <footer class="foot">AJUSTE PULMÃO/APANHA · v1.0</footer>
+  </section>
+
+  <!-- ===================== SUCESSO ===================== -->
+  <section id="screen-success" class="screen">
+    <div class="success-box">
+      <div class="check">✓</div>
+      <h2>Item Ajustado!</h2>
+      <p id="success-desc">—</p>
+    </div>
+  </section>
+
+</div>
+
+<!-- ===================== MODAL CONFIRMAÇÃO ===================== -->
+<div class="modal-overlay" id="modal-confirm">
+  <div class="modal-box">
+    <h3>Confirmar ajuste</h3>
+    <p>Deseja ajustar o item <strong id="modal-desc">—</strong> (Cód. <strong id="modal-cod">—</strong>)?</p>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="modal-nao">Não</button>
+      <button class="btn btn-primary" id="modal-sim">Sim</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js?v=1"></script>
+<script src="app.js?v=1"></script>
+</body>
+</html>

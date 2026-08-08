@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin — Ajuste Pulmão/Apanha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<div id="app" class="wide">
+
+  <!-- ===================== GATE DE SENHA ===================== -->
+  <section id="screen-gate" class="screen active">
+    <div class="brand">
+      <div class="eyebrow">CD-107 · Mesa</div>
+      <h1>Painel Admin</h1>
+    </div>
+    <div class="panel">
+      <div class="field">
+        <label for="gate-senha">Senha da mesa</label>
+        <input type="password" id="gate-senha" placeholder="••••••">
+      </div>
+      <button class="btn btn-primary" id="btn-gate">Entrar</button>
+      <div class="error-text" id="gate-error"></div>
+    </div>
+  </section>
+
+  <!-- ===================== PAINEL PRINCIPAL ===================== -->
+  <section id="screen-admin" class="screen">
+    <div class="topbar">
+      <div class="who">Painel da Mesa</div>
+      <a class="link-btn" href="index.html">App do operador →</a>
+    </div>
+
+    <!-- Upload de endereços -->
+    <div class="panel" style="margin-bottom:20px;">
+      <div class="eyebrow" style="color:var(--amber); font-family:var(--font-mono); font-size:11px; letter-spacing:2px; margin-bottom:10px;">BASE DE ENDEREÇOS</div>
+      <p style="color:var(--text-dim); font-size:13px; margin-top:0;">
+        Envie a planilha (.xlsx ou .csv) com colunas de <strong>Endereço</strong>, <strong>Código</strong> e <strong>Descrição</strong>.
+        Isso substitui/atualiza a base usada pelo app do operador para buscar o item a partir do endereço.
+      </p>
+      <div class="field">
+        <input type="file" id="in-file" accept=".xlsx,.xls,.csv">
+      </div>
+      <button class="btn btn-primary" id="btn-upload" disabled>Processar e enviar</button>
+      <div class="progress-wrap" id="progress-wrap" style="display:none;">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div class="error-text" id="upload-status"></div>
+    </div>
+
+    <!-- Cadastro de operadores -->
+    <div class="panel">
+      <div class="eyebrow" style="color:var(--amber); font-family:var(--font-mono); font-size:11px; letter-spacing:2px; margin-bottom:10px;">OPERADORES</div>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:8px; align-items:end; margin-bottom:16px;">
+        <div class="field" style="margin-bottom:0;">
+          <label>Matrícula</label>
+          <input type="text" id="op-matricula" placeholder="225946">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Nome</label>
+          <input type="text" id="op-nome" placeholder="Nome completo">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Senha</label>
+          <input type="text" id="op-senha" placeholder="Senha">
+        </div>
+        <button class="btn btn-primary" id="btn-add-op" style="height:44px;">+</button>
+      </div>
+      <div class="error-text" id="op-error"></div>
+
+      <table class="op-table">
+        <thead>
+          <tr><th>Matrícula</th><th>Nome</th><th>Senha</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody id="op-tbody">
+          <tr><td colspan="5" style="color:var(--text-faint);">Carregando…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer class="foot">AJUSTE PULMÃO/APANHA · ADMIN v1.0</footer>
+  </section>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js?v=1"></script>
+<script src="admin.js?v=1"></script>
+</body>
+</html>
